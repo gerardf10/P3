@@ -145,12 +145,12 @@ void compare(const vector<float> &vref, const vector<float> &vtest,
     else
       num_voiced++;
 
-    if (vref[i] == 0.0F and vtest[i] == 0.0F)
+    if (vref[i] == 0.0F && vtest[i] == 0.0F)
       continue;
   
-    if (vref[i] == 0.0F and vtest[i] != 0.0F) {
+    if (vref[i] == 0.0F && vtest[i] != 0.0F) {
       num_unvoiced_voiced++;
-    } else if (vref[i] != 0.0F and vtest[i] == 0.0F) {
+    } else if (vref[i] != 0.0F && vtest[i] == 0.0F) {
       num_voiced_unvoiced++;
     } else {
       float f = fabs((vref[i] - vtest[i])/vref[i]);
