@@ -22,16 +22,42 @@ namespace upc {
 		HAMMING,						///< Hamming window
     TUKEY,
 	};
-
+	///
+	/// Returns true is the frame is unvoiced
+	///
+    bool unvoiced(float pot, float r1norm, float rmaxnorm) const;
     void set_window(Window type); ///< pre-compute window
+    bool analyze_frame(const std::vector<float>& in,
+                       float& out_pot,
+                       float& out_norm_r1,
+                       float& out_norm_rpeak,
+                       unsigned int& out_best_lag,
+                       bool& out_reliable_peak,
+                       // New output parameters for interpolation:
+                       float& r_val_at_lag_minus_1, 
+                       float& r_val_at_lag,         
+                       float& r_val_at_lag_plus_1   
+                       ) const;
 
-  private:
+
+    float lag_to_f0(unsigned int best_lag,
+                    bool reliable_peak,
+                    float pot,
+                    float norm_r1,
+                    float norm_rpeak,
+                    // New input parameters for interpolation:
+                    float r_val_at_lag_minus_1, 
+                    float r_val_at_lag,         
+                    float r_val_at_lag_plus_1   
+                    ) const;
+void setSkipUnvoicedTest(bool skip) { skipUnvoicedTest_ = skip; }
+                               private:
     std::vector<float> window; ///< precomputed window
     unsigned int frameLen, ///< length of frame (in samples). Has to be set in the constructor call
       samplingFreq, ///< sampling rate (in samples per second). Has to be set in the constructor call
       npitch_min, ///< minimum value of pitch period, in samples
       npitch_max; ///< maximum value of pitch period, in samples
- 
+ bool skipUnvoicedTest_ = false;  
 	///
 	/// Computes correlation from lag=0 to r.size()
 	///
@@ -42,26 +68,19 @@ namespace upc {
 	///
     float compute_pitch(std::vector<float> & x) const;
 	
-	///
-	/// Returns true is the frame is unvoiced
-	///
-    bool unvoiced(float pot, float r1norm, float rmaxnorm) const;
+
 
 
   public:
-    PitchAnalyzer(	unsigned int fLen,			///< Frame length in samples
-					unsigned int sFreq,			///< Sampling rate in Hertzs
-					Window w=PitchAnalyzer::HAMMING,	///< Window type
-					float min_F0 = MIN_F0,		///< Pitch range should be restricted to be above this value
-					float max_F0 = MAX_F0		///< Pitch range should be restricted to be below this value
-				 )
-	{
-      frameLen = fLen;
-      samplingFreq = sFreq;
-      set_f0_range(min_F0, max_F0);
-      set_window(w);
-    }
-
+PitchAnalyzer(unsigned int fLen,
+                             unsigned int sFreq,
+                             Window w,
+                             float min_F0,
+                             float max_F0)
+  : frameLen(fLen), samplingFreq(sFreq) {
+    set_f0_range(min_F0, max_F0);
+    set_window(w);
+}
 	///
     /// Operator (): computes the pitch for the given vector x
 	///

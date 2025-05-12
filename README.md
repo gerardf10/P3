@@ -181,16 +181,16 @@ float PitchAnalyzer::compute_pitch(vector<float> & x) const {
     y el *score* TOTAL proporcionados por `pitch_evaluate` en la evaluación de la base de datos 
 	`pitch_db/train`..
 
-	Fent servir el fitxer "run_get_pitch.sh" que trobem a la carpeta "scripts", principalment, podem constatar que d'acord amb la decisió que pren "unvoiced" el més important són els llindars de l'autocorrelació normalitzada d'1 (r1norm) i del valor de l'autocorrelació al seu màxim secundari (rmaxnorm). D'aquesta manera aconseguim una puntuació màxima total de 92.3%.
+	Fent servir el fitxer "run_get_pitch.sh" que trobem a la carpeta "scripts", principalment, podem constatar que d'acord amb la decisió que pren "unvoiced" el més important són els llindars de l'autocorrelació normalitzada d'1 (r1norm) i del valor de l'autocorrelació al seu màxim secundari (rmaxnorm). D'aquesta manera aconseguim una puntuació màxima total de 92.73%.
 
 Taula:
 | Error type                  | Number of errors      | %      |
 |----------------------------|-----------------------|--------|
-| Unvoiced frames as voiced  | 235/7045              | 3.05   |
-| Voiced frames as unvoiced  | 268/4155              | 7.10   |
-| Gross voiced errors (+20%) | 41/3887               | 0.67   |
-| MSE of fine errors         |                       | 2.71   |
-| **TOTAL**                  |                       | **92.39** |
+| Unvoiced frames as voiced  | 197/7045              | 2.80   |
+| Voiced frames as unvoiced  | 295/4155              | 7.10   |
+| Gross voiced errors (+20%) | 26/3887               | 0.67   |
+| MSE of fine errors         |                       | 2.52   |
+| **TOTAL**                  |                       | **92.73** |
 
 Captura de pantalla:
 
@@ -240,6 +240,8 @@ Ejercicios de ampliación
 
   Després del que es va comentar a la sessió de laboratori i després que algunes d'aquestes tècniques s'hagin vist a classe, així com haver consultat la documentació que se'ns posava a disposició i haver navegat per Internet, hem implementat el center clipping, el filtre pasbaix i el filtre de mediana, entre d'altres millores que es detallen a continuació.
 
+  Hem utilitzat la RECT window pel VAD i la hamming (a la qual obliguem a donar una resposta) pel pitch estimator.
+
 - Center clipping:
 
 ```cpp
@@ -282,45 +284,114 @@ void centralClipping(vector<float>& x, float threshold_factor = 0.3f) {
 ```cpp
 // Enhanced median filter with voiced continuity protection
 vector<float> medianFilter(const vector<float>& f0, int window_size = 5) {
-    vector<float> filtered(f0.size());
+    vector<float> filtered = f0; // Start with original values
     int half = window_size / 2;
     
-    // First pass: standard median filtering
     for (size_t i = 0; i < f0.size(); ++i) {
+        // Skip processing if this is a reliable voiced frame
+        if (f0[i] > 0) {
+            // Don't filter reliable frames with good context
+            bool has_consistent_context = true;
+            int context_voiced = 0;
+            
+            // Check consistency with surrounding frames
+            for (int j = -2; j <= 2; ++j) {
+                if (j == 0) continue;
+                size_t idx = i + j;
+                if (idx < f0.size() && f0[idx] > 0) {
+                    context_voiced++;
+                    float ratio = max(f0[i], f0[idx]) / min(f0[i], f0[idx]);
+                    // Detect octave jumps (ratio close to 2) or large deviations
+                    if (ratio > 1.8f && ratio < 2.2f) {
+                        has_consistent_context = false; // Possible octave error
+                    }
+                    else if (ratio > 1.3f) {
+                        has_consistent_context = false; // Large discontinuity
+                    }
+                }
+            }
+            
+            // Skip filtering if frame is in a consistent voiced region
+            if (has_consistent_context && context_voiced >= 2) {
+                continue; // Keep original value
+            }
+        }
+        
+        // Collect values from window
         vector<float> window;
         for (int j = -half; j <= half; ++j) {
             int idx = i + j;
-            if (idx < 0) 
-                window.push_back(f0.front());
-            else if (idx >= static_cast<int>(f0.size()))
-                window.push_back(f0.back());
-            else
+            if (idx >= 0 && idx < static_cast<int>(f0.size()))
                 window.push_back(f0[idx]);
         }
-        // Filter out zeros before finding median (for better pitch continuity)
-        vector<float> non_zero;
+        
+        // Separate voiced and unvoiced values
+        vector<float> voiced;
+        int unvoiced_count = 0;
+        
         for (float val : window) {
-            if (val > 0) non_zero.push_back(val);
+            if (val > 0) {
+                voiced.push_back(val);
+            } else {
+                unvoiced_count++;
+            }
         }
         
-        if (non_zero.empty()) {
-            filtered[i] = 0.0f; // No voiced frames in window
-        } else {
-            // Find median of non-zero values
-            sort(non_zero.begin(), non_zero.end());
-            filtered[i] = non_zero[non_zero.size()/2];
-            
-            // If original was unvoiced but surrounded by similar voiced frames, use median
-            if (f0[i] == 0.0f) {
-                // Count voiced frames in window
-                int voiced_count = 0;
-                for (float val : window) {
-                    if (val > 0) voiced_count++;
+        // Apply different strategies based on frame context
+        if (f0[i] == 0) {
+            // Current frame is unvoiced
+            if (voiced.size() > window.size() * 0.7f) {
+                // Strong evidence of voicing in context
+                
+                // Find clusters in voiced values to avoid octave errors
+                sort(voiced.begin(), voiced.end());
+                
+                // Find most common pitch range
+                float best_pitch = 0;
+                int max_cluster = 0;
+                
+                for (size_t v = 0; v < voiced.size(); v++) {
+                    int cluster_size = 1;
+                    for (size_t v2 = 0; v2 < voiced.size(); v2++) {
+                        if (v == v2) continue;
+                        float ratio = max(voiced[v], voiced[v2]) / min(voiced[v], voiced[v2]);
+                        if (ratio < 1.2f) {
+                            cluster_size++;
+                        }
+                    }
+                    
+                    if (cluster_size > max_cluster) {
+                        max_cluster = cluster_size;
+                        best_pitch = voiced[v];
+                    }
                 }
                 
-                // If less than half are voiced, keep as unvoiced
-                if (voiced_count <= window_size/2) {
-                    filtered[i] = 0.0f;
+                if (max_cluster >= 3) {
+                    // Found a strong cluster - correct to this value
+                    filtered[i] = best_pitch;
+                }
+            }
+        } else {
+            // Current frame is voiced
+            if (unvoiced_count > window.size() * 0.7f) {
+                // Strong evidence of unvoicing in context
+                filtered[i] = 0;
+            } else if (!voiced.empty()) {
+                // Look for possible octave errors
+                sort(voiced.begin(), voiced.end());
+                
+                // Compare current pitch with median in context
+                float median_pitch = voiced[voiced.size()/2];
+                float ratio = max(f0[i], median_pitch) / min(f0[i], median_pitch);
+                
+                // Detect and fix potential octave errors
+                if (ratio > 1.8f && ratio < 2.2f) {
+                    // Potential octave error - correct towards neighborhood
+                    filtered[i] = median_pitch;
+                }
+                else if (ratio > 1.5f) {
+                    // Large jump - use weighted correction
+                    filtered[i] = 0.7f * f0[i] + 0.3f * median_pitch;
                 }
             }
         }

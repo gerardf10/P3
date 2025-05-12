@@ -395,7 +395,22 @@ int main(int argc, const char *argv[]) {
     // Define analyzer.
     // Aquí se definen por ejemplo los límites de pitch deseados. 
     // En este ejemplo, se utiliza: min pitch = 50 Hz y max pitch = 500 Hz.
-    PitchAnalyzer analyzer(n_len, rate, PitchAnalyzer::TUKEY, 80, 350);
+        // Pitch estimation with a Tukey window
+        upc::PitchAnalyzer pitchAnalyzer( n_len,
+                                        rate,
+                                        upc::PitchAnalyzer::HAMMING,
+                                        /*min_F0=*/80,
+                                        /*max_F0=*/350 );
+   // force Tukey estimator to *always* output some F0
+      pitchAnalyzer.setSkipUnvoicedTest(true);
+        // VAD decision with a Rectangular window
+        upc::PitchAnalyzer vadAnalyzer(   n_len,
+                                        rate,
+                                        upc::PitchAnalyzer::RECT,
+                                        /*min_F0=*/80,
+                                        /*max_F0=*/350 );
+
+    
     /// \TODO
     /// Preprocess the input signal in order to ease pitch estimation. For instance,
     /// central-clipping or low pass filtering may be used.
@@ -414,11 +429,29 @@ int main(int argc, const char *argv[]) {
         lowPassFilter(x, rate, effective_cutoff);
     }
     // Iterate for each frame and save values in f0 vector
+    vector<float> frame(n_len);
     vector<float> f0;
-    for (vector<float>::iterator iX = x.begin(); iX + n_len < x.end(); iX += n_shift) {
-        float f = analyzer(iX, iX + n_len);
-        f0.push_back(f);
+    for (auto it = x.begin(); it + n_len < x.end(); it += n_shift) {
+        std::copy(it, it + n_len, frame.begin());
+
+        float pot2, nr1_2, nrp2; // For vadAnalyzer
+        unsigned int lag2; bool rp2;
+        // Declare dummy variables for correlation values for vadAnalyzer call
+        float r_m1_vad, r_0_vad, r_p1_vad; 
+        vadAnalyzer.analyze_frame(frame, pot2, nr1_2, nrp2, lag2, rp2, r_m1_vad, r_0_vad, r_p1_vad); // Pass new arguments
+
+        if (vadAnalyzer.unvoiced(pot2, nr1_2, nrp2)) {
+            f0.push_back(0.0f);
+        } else {
+            float pot1, nr1_1, nrp1;
+            unsigned int lag1; bool rp1;
+            // These are already correctly declared for pitchAnalyzer
+            float r_m1, r_0, r_p1; 
+            pitchAnalyzer.analyze_frame(frame, pot1, nr1_1, nrp1, lag1, rp1, r_m1, r_0, r_p1);
+            f0.push_back(pitchAnalyzer.lag_to_f0(lag1, rp1, pot1, nr1_1, nrp1, r_m1, r_0, r_p1));
+        }
     }
+
 
     /// \TODO
     /// Postprocess the estimation in order to supress errors. For instance, a median filter

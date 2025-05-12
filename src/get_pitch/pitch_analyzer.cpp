@@ -1,175 +1,172 @@
-/// @file
-
-#include <iostream>
-#include <math.h>
+/// @file pitch_analyzer.cpp
 #include "pitch_analyzer.h"
+#include <cmath>
+#include <algorithm>
 
-using namespace std;
-void makeTukeyWindow(vector<float>& w, float alpha) {
+namespace upc {
+
+// Helper to build Tukey window
+static void makeTukeyWindow(std::vector<float>& w, float alpha) {
     int N = w.size();
-    int edge = int(alpha * (N-1) / 2);
+    int edge = int(alpha * (N - 1) / 2);
     for (int n = 0; n < N; ++n) {
         if (n < edge)
-            w[n] = 0.5f * (1 + cos( 3.14159 * (2.0f*n/alpha/(N-1) - 1) ));
-        else if (n <= N-1-edge)
+            w[n] = 0.5f * (1 + cosf((float)3.1415926 * (2.0f * n / alpha / (N - 1) - 1)));
+        else if (n <= N - 1 - edge)
             w[n] = 1.0f;
         else
-            w[n] = 0.5f * (1 + cos( 3.14159 * (2.0f*(n-(N-1- edge))/alpha/(N-1) + 1) ));
+            w[n] = 0.5f * (1 + cosf((float)3.1415926 * (2.0f * (n - (N - 1 - edge)) / alpha / (N - 1) + 1)));
     }
 }
 
-/// Name space of UPC
-namespace upc {
-  void PitchAnalyzer::autocorrelation(const vector<float> &x, vector<float> &r) const {
-    unsigned int N = x.size();
-    // Para cada retardo l (lag)
-    for (unsigned int l = 0; l < r.size(); ++l) {
-        float sum = 0.0F;
-        // r_{xx}[m] = \frac{1}{N} \sum_0^{N-m} x[n] x[n+m]
-        // Se recorre la señal hasta el índice N - l para evitar acceder fuera de rango
-        for (unsigned int n = 0; n < N - l; ++n) {
-            sum += x[n] * x[n + l];
-        }
-        // Autocorrelación sesgada: se divide por el número total de muestras N
-        r[l] = sum / static_cast<float>(N);
-    }
-
-    // Se ajusta r[0] para evitar problemas posteriores (como división por cero o logaritmos)
-    if (r[0] == 0.0F)
-        r[0] = 1e-10F;
-  }
 
 
-  void PitchAnalyzer::set_window(Window win_type) {
-    if (frameLen == 0)
-      return;
-
+void PitchAnalyzer::set_window(Window win_type) {
     window.resize(frameLen);
-
     switch (win_type) {
     case HAMMING:
-      for (unsigned int n = 0; n < frameLen; ++n) {
-        window[n] = 0.54f - 0.46f * cos(2.0f * 3.14159 * n / (frameLen - 1));
-      }
-      break;
+        for (unsigned int i = 0; i < frameLen; ++i)
+            window[i] = 0.54f - 0.46f * cosf(2.0f * (float)3.1415926 * i / (frameLen - 1));
+        break;
     case TUKEY:
-      // Tukey window with alpha = 0.5
-      makeTukeyWindow(window, 0.2f);
-      break;
+        makeTukeyWindow(window, 0.01f);
+        break;
     case RECT:
     default:
-      window.assign(frameLen, 1);
+        std::fill(window.begin(), window.end(), 1.0f);
     }
-  }
+}
 
-  void PitchAnalyzer::set_f0_range(float min_F0, float max_F0) {
-    npitch_min = (unsigned int) samplingFreq/max_F0;
-    if (npitch_min < 2)
-      npitch_min = 2;  // samplingFreq/2
+void PitchAnalyzer::set_f0_range(float min_F0, float max_F0) {
+    npitch_min = samplingFreq / max_F0;
+    npitch_min = std::max(npitch_min, 2u);
+    npitch_max = 1 + static_cast<unsigned int>(samplingFreq / min_F0);
+    npitch_max = std::min(npitch_max, frameLen / 2u);
+}
 
-    npitch_max = 1 + (unsigned int) samplingFreq/min_F0;
-
-    //frameLen should include at least 2*T0
-    if (npitch_max > frameLen/2)
-      npitch_max = frameLen/2;
-  }
-
-  bool PitchAnalyzer::unvoiced(float pot, float norm_r1, float norm_rpeak) const {
-    // Further refined thresholds based on error analysis
-    const float threshold_power = -52.0f;    // Lowered to reduce voiced-as-unvoiced errors
-    const float threshold_r1 = 0.45f;        // Reduced to better capture voiced frames
-    const float threshold_rpeak = 0.42f;     // Reduced to catch more voiced frames
-    
-    // Special case for strong periodicity - clearly voiced
-    if (norm_rpeak > 0.6f && pot > -48.0f) {
-      return false;  // Very strong peak and decent power - definitely voiced
+void PitchAnalyzer::autocorrelation(const std::vector<float>& x,
+                                    std::vector<float>& r) const {
+    unsigned int N = x.size();
+    for (unsigned int l = 0; l < r.size(); ++l) {
+        float sum = 0.0f;
+        for (unsigned int n = 0; n + l < N; ++n)
+            sum += x[n] * x[n + l];
+        r[l] = sum / static_cast<float>(N);
     }
-    
-    // Additional special case for borderline frames with good periodicity
-    if (norm_rpeak > 0.52f && norm_r1 > 0.5f && pot > -55.0f) {
-      return false;  // Good periodicity indicators even with lower power
-    }
-    
-    // Keep the original OR structure but with refined thresholds
-    if ((pot < threshold_power) ||
-        (norm_r1 < threshold_r1) ||
-        (norm_rpeak < threshold_rpeak))
-    {
-      // Expanded exception for borderline cases with good power and decent periodicity
-      if ((pot > -42.0f && norm_rpeak > 0.36f && norm_r1 > 0.42f) ||
-          (pot > -46.0f && norm_rpeak > 0.45f)) {
-        return false;  // More cases classified as voiced
-      }
-      
-      return true;  // Most frames will be classified as unvoiced
-    } else {
-      return false;  // Voiced frame
-    }
-  }
+    if (r[0] == 0.0f)
+        r[0] = 1e-10f;
+}
 
-
-  
-float PitchAnalyzer::compute_pitch(vector<float> & x) const {
-    if (x.size() != frameLen)
-        return -1.0F;
-
-    // 1) Ventaneo
-    for (unsigned int i = 0; i < x.size(); ++i)
+bool PitchAnalyzer::analyze_frame(const std::vector<float>& in,
+                                  float& out_pot,
+                                  float& out_norm_r1,
+                                  float& out_norm_rpeak,
+                                  unsigned int& out_best_lag,
+                                  bool& out_reliable_peak,
+                                  // New output parameters
+                                  float& r_val_at_lag_minus_1,
+                                  float& r_val_at_lag,        
+                                  float& r_val_at_lag_plus_1  
+                                  ) const {
+    // copy and apply window
+    std::vector<float> x = in;
+    for (unsigned int i = 0; i < frameLen; ++i)
         x[i] *= window[i];
 
-    // 2) Autocorrelación
-    vector<float> r(npitch_max);
+    // compute autocorrelation
+    std::vector<float> r(npitch_max);
     autocorrelation(x, r);
 
-    // 3) Definir rango de búsqueda
-    const unsigned int maxPitch = 400;
-    const unsigned int minPitch = 80;
-    unsigned int lag_min = samplingFreq / maxPitch;
-    unsigned int lag_max = samplingFreq / minPitch;
-    if (lag_max >= r.size()) lag_max = r.size() - 1;
+    // define search range
+    unsigned int lag_min = samplingFreq / 400;
+    unsigned int lag_max = samplingFreq / 80;
+    lag_max = std::min(lag_max, static_cast<unsigned int>(r.size() - 1));
 
-    // 4) Búsqueda del pico grueso
-    unsigned int best_lag = lag_min;
+    // find best lag
+    out_best_lag = lag_min;
     float best_corr = r[lag_min];
     for (unsigned int l = lag_min + 1; l <= lag_max; ++l) {
         if (r[l] > best_corr) {
             best_corr = r[l];
-            best_lag = l;
+            out_best_lag = l;
+        }
+    }
+    r_val_at_lag = r[out_best_lag];
+    // Handle boundary conditions for neighbors carefully
+    r_val_at_lag_minus_1 = (out_best_lag > 0 && out_best_lag < r.size()) ? r[out_best_lag - 1] : r_val_at_lag;
+    r_val_at_lag_plus_1 = (out_best_lag + 1 < r.size()) ? r[out_best_lag + 1] : r_val_at_lag;
+    
+    // compute power & normalizations
+    out_pot = 10.0f * log10f(r[0]);
+    out_norm_r1 = r[1] / r[0];
+    out_norm_rpeak = best_corr / r[0];
+
+    // peak reliability
+    out_reliable_peak = (out_best_lag > lag_min && out_best_lag < lag_max)
+        && (best_corr > r[out_best_lag - 1] && best_corr > r[out_best_lag + 1]);
+
+    return true;
+}
+
+float PitchAnalyzer::lag_to_f0(unsigned int best_lag,
+                               bool reliable_peak,
+                               float pot,
+                               float norm_r1,
+                               float norm_rpeak,
+                               // New input parameters
+                               float r_val_at_lag_minus_1,
+                               float r_val_at_lag,        
+                               float r_val_at_lag_plus_1  
+                               ) const {
+    float delta = 0.0f;
+    if (reliable_peak && best_lag > 0) { 
+        // Check if r_val_at_lag is a true peak and neighbors are distinct enough
+        // to avoid issues with flat peaks or invalid denominator.
+        if (r_val_at_lag > r_val_at_lag_minus_1 && r_val_at_lag > r_val_at_lag_plus_1) {
+            float denominator = r_val_at_lag_minus_1 - 2.0f * r_val_at_lag + r_val_at_lag_plus_1;
+            if (fabs(denominator) > 1e-6f) { // Avoid division by zero or very small numbers
+                delta = 0.5f * (r_val_at_lag_minus_1 - r_val_at_lag_plus_1) / denominator;
+                // Clamp delta to a reasonable range, e.g., between -0.5 and +0.5
+                delta = std::max(-0.5f, std::min(delta, 0.5f));
+            }
         }
     }
 
-    // 5) Medida de potencia y normalizaciones
-    float pot = 10 * log10(r[0]);
-    float norm_r1   = r[1]        / r[0];
-    float norm_rpeak = r[best_lag] / r[0];
-
-    // 6) Validar fiabilidad del pico
-    bool reliable_peak = (best_lag > lag_min && best_lag < lag_max)
-        && (r[best_lag] > r[best_lag-1] && r[best_lag] > r[best_lag+1]);
-
-    // <<< NUEVO >>> 7) Interpolación parabólica para sub-muestra
-    float delta = 0.0f;
-    if (reliable_peak && best_lag > 0 && best_lag < r.size()-1) {
-        float y1 = r[best_lag - 1];
-        float y2 = r[best_lag];
-        float y3 = r[best_lag + 1];
-        // fórmula Δ = 0.5*(y1 - y3)/(y1 - 2*y2 + y3)
-        delta = 0.5f * (y1 - y3) / ( (y1 - 2.0f*y2 + y3) + 1e-10f );
-        // acotar Δ para evitar saltos excesivos
-        delta = std::max(std::min(delta, 0.5f), -0.5f);
-    }
-
-    // 8) Decidir voiced/unvoiced y devolver f0
-    if (!reliable_peak || unvoiced(pot, norm_r1, norm_rpeak)) {
+    // only zero‐out on “unvoiced” if skipUnvoicedTest_==false
+    if (!reliable_peak ||
+        (!skipUnvoicedTest_ && unvoiced(pot,norm_r1,norm_rpeak)))
         return 0.0f;
-    } else {
-        // uso best_lag + delta para frecuencia sub-muestral
-        return samplingFreq / (best_lag + delta);
+
+    return static_cast<float>(samplingFreq) / (best_lag + delta);
+}
+
+float PitchAnalyzer::compute_pitch(std::vector<float>& x) const {
+    float pot, nr1, nrp;
+    unsigned int lag;
+    bool rp;
+    // Declare variables for the new correlation values
+    float r_m1, r_0, r_p1; 
+    // Call analyze_frame with the new arguments
+    analyze_frame(x, pot, nr1, nrp, lag, rp, r_m1, r_0, r_p1);
+    // Call lag_to_f0 with the new arguments
+    return lag_to_f0(lag, rp, pot, nr1, nrp, r_m1, r_0, r_p1);
+}
+
+bool PitchAnalyzer::unvoiced(float pot, float norm_r1, float norm_rpeak) const {
+    const float threshold_power = -48.0f;
+    const float threshold_r1 = 0.45f;
+    const float threshold_rpeak = 0.42f;
+    if (norm_rpeak > 0.6f && pot > -48.0f)
+        return false;
+    if (norm_rpeak > 0.52f && norm_r1 > 0.5f && pot > -55.0f)
+        return false;
+    if ((pot < threshold_power) || (norm_r1 < threshold_r1) || (norm_rpeak < threshold_rpeak)) {
+        if ((pot > -42.0f && norm_rpeak > 0.36f && norm_r1 > 0.42f) ||
+            (pot > -46.0f && norm_rpeak > 0.45f))
+            return false;
+        return true;
     }
+    return false;
 }
 
-
-
-
-
-}
+} // namespace upc
