@@ -33,6 +33,12 @@ Options:
     --clip              Enable central clipping preprocessing.
     --lowpass=<fc>      Apply low-pass filtering with cutoff frequency <fc> (Hz) [default: 8000]
     --median            Apply median filtering postprocessing.
+
+Arguments:
+    input-wav   Wave file with the audio signal
+    output-txt  Output file: ASCII file with the result of the estimation:
+                    - One line per frame with the estimated f0
+                    - If considered unvoiced, f0 must be set to f0 = 0
 )";
 
 // Función auxiliar para aplicar central clipping a la señal
@@ -68,46 +74,116 @@ void centralClipping(vector<float>& x, float threshold_factor = 0.3f) {
 }
 
 // Enhanced median filter with voiced continuity protection
+// Enhanced median filter optimized for pitch continuity
 vector<float> medianFilter(const vector<float>& f0, int window_size = 5) {
-    vector<float> filtered(f0.size());
+    vector<float> filtered = f0; // Start with original values
     int half = window_size / 2;
     
-    // First pass: standard median filtering
     for (size_t i = 0; i < f0.size(); ++i) {
+        // Skip processing if this is a reliable voiced frame
+        if (f0[i] > 0) {
+            // Don't filter reliable frames with good context
+            bool has_consistent_context = true;
+            int context_voiced = 0;
+            
+            // Check consistency with surrounding frames
+            for (int j = -2; j <= 2; ++j) {
+                if (j == 0) continue;
+                size_t idx = i + j;
+                if (idx < f0.size() && f0[idx] > 0) {
+                    context_voiced++;
+                    float ratio = max(f0[i], f0[idx]) / min(f0[i], f0[idx]);
+                    // Detect octave jumps (ratio close to 2) or large deviations
+                    if (ratio > 1.8f && ratio < 2.2f) {
+                        has_consistent_context = false; // Possible octave error
+                    }
+                    else if (ratio > 1.3f) {
+                        has_consistent_context = false; // Large discontinuity
+                    }
+                }
+            }
+            
+            // Skip filtering if frame is in a consistent voiced region
+            if (has_consistent_context && context_voiced >= 2) {
+                continue; // Keep original value
+            }
+        }
+        
+        // Collect values from window
         vector<float> window;
         for (int j = -half; j <= half; ++j) {
             int idx = i + j;
-            if (idx < 0) 
-                window.push_back(f0.front());
-            else if (idx >= static_cast<int>(f0.size()))
-                window.push_back(f0.back());
-            else
+            if (idx >= 0 && idx < static_cast<int>(f0.size()))
                 window.push_back(f0[idx]);
         }
-        // Filter out zeros before finding median (for better pitch continuity)
-        vector<float> non_zero;
+        
+        // Separate voiced and unvoiced values
+        vector<float> voiced;
+        int unvoiced_count = 0;
+        
         for (float val : window) {
-            if (val > 0) non_zero.push_back(val);
+            if (val > 0) {
+                voiced.push_back(val);
+            } else {
+                unvoiced_count++;
+            }
         }
         
-        if (non_zero.empty()) {
-            filtered[i] = 0.0f; // No voiced frames in window
-        } else {
-            // Find median of non-zero values
-            sort(non_zero.begin(), non_zero.end());
-            filtered[i] = non_zero[non_zero.size()/2];
-            
-            // If original was unvoiced but surrounded by similar voiced frames, use median
-            if (f0[i] == 0.0f) {
-                // Count voiced frames in window
-                int voiced_count = 0;
-                for (float val : window) {
-                    if (val > 0) voiced_count++;
+        // Apply different strategies based on frame context
+        if (f0[i] == 0) {
+            // Current frame is unvoiced
+            if (voiced.size() > window.size() * 0.7f) {
+                // Strong evidence of voicing in context
+                
+                // Find clusters in voiced values to avoid octave errors
+                sort(voiced.begin(), voiced.end());
+                
+                // Find most common pitch range
+                float best_pitch = 0;
+                int max_cluster = 0;
+                
+                for (size_t v = 0; v < voiced.size(); v++) {
+                    int cluster_size = 1;
+                    for (size_t v2 = 0; v2 < voiced.size(); v2++) {
+                        if (v == v2) continue;
+                        float ratio = max(voiced[v], voiced[v2]) / min(voiced[v], voiced[v2]);
+                        if (ratio < 1.2f) {
+                            cluster_size++;
+                        }
+                    }
+                    
+                    if (cluster_size > max_cluster) {
+                        max_cluster = cluster_size;
+                        best_pitch = voiced[v];
+                    }
                 }
                 
-                // If less than half are voiced, keep as unvoiced
-                if (voiced_count <= window_size/2) {
-                    filtered[i] = 0.0f;
+                if (max_cluster >= 3) {
+                    // Found a strong cluster - correct to this value
+                    filtered[i] = best_pitch;
+                }
+            }
+        } else {
+            // Current frame is voiced
+            if (unvoiced_count > window.size() * 0.7f) {
+                // Strong evidence of unvoicing in context
+                filtered[i] = 0;
+            } else if (!voiced.empty()) {
+                // Look for possible octave errors
+                sort(voiced.begin(), voiced.end());
+                
+                // Compare current pitch with median in context
+                float median_pitch = voiced[voiced.size()/2];
+                float ratio = max(f0[i], median_pitch) / min(f0[i], median_pitch);
+                
+                // Detect and fix potential octave errors
+                if (ratio > 1.8f && ratio < 2.2f) {
+                    // Potential octave error - correct towards neighborhood
+                    filtered[i] = median_pitch;
+                }
+                else if (ratio > 1.5f) {
+                    // Large jump - use weighted correction
+                    filtered[i] = 0.7f * f0[i] + 0.3f * median_pitch;
                 }
             }
         }
@@ -115,6 +191,10 @@ vector<float> medianFilter(const vector<float>& f0, int window_size = 5) {
     
     return filtered;
 }
+
+
+
+
 
 // New function: Fix isolated unvoiced frames in voiced regions
 // Enhanced isolated frame correction with relaxed criteria
@@ -320,7 +400,7 @@ int main(int argc, const char *argv[]) {
     /// Preprocess the input signal in order to ease pitch estimation. For instance,
     /// central-clipping or low pass filtering may be used.
     //if(1){
-        if(apply_clip) {
+    if(apply_clip) {
         cout << "Applying central clipping preprocessing...\n";
         centralClipping(x);
     }
@@ -345,27 +425,25 @@ int main(int argc, const char *argv[]) {
     /// or time-warping may be used.
     
     //if(1){
-    if (apply_median) {
-    //No aplico la media porque va peor entonces xd
-    // Apply selective voice recovery filter - this should help with voiced-as-unvoiced errors
-        cout << "Applying selective voice recovery...\n";
-        f0 = recoverMissedVoicedFrames(f0);
-        // Fix brief unvoiced segments in voiced regions
-        cout << "Fixing brief unvoiced segments...\n";
-        f0 = fixBriefUnvoicedSegments(f0, 2);
-        
-        // Add an additional targeted fix for isolated unvoiced frames
-        // with very strict criteria to avoid false positives
-        cout << "Applying precision voice recovery...\n";
-        f0 = fixIsolatedFramesWithPitchConsistency(f0);
-        //cout << "Applying enhanced median filtering...\n";
-        //f0 = medianFilter(f0, 5);  
-        
-        // Fix isolated unvoiced frames with increased context and relaxed criteria
-        //cout << "Fixing isolated unvoiced frames...\n";
-        //f0 = fixIsolatedFrames(f0, 3);
-        
-    }
+if (apply_median) {
+    
+    cout << "Applying enhanced median filtering...\n";
+    f0 = medianFilter(f0, 3);
+
+    cout << "Fixing brief unvoiced segments...\n";
+    f0 = fixBriefUnvoicedSegments(f0, 2);
+    
+
+    cout << "Applying precision voice recovery...\n";
+    f0 = fixIsolatedFramesWithPitchConsistency(f0);
+    
+    cout << "Applying selective voice recovery...\n";
+    f0 = recoverMissedVoicedFrames(f0);
+    
+
+    
+
+}
     
 
     // Write f0 contour into the output file

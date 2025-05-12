@@ -91,78 +91,69 @@ namespace upc {
     }
   }
 
+
   
 float PitchAnalyzer::compute_pitch(vector<float> & x) const {
-  if (x.size() != frameLen)
-      return -1.0F;
+    if (x.size() != frameLen)
+        return -1.0F;
 
-  // Apply window to input frame
-  for (unsigned int i = 0; i < x.size(); ++i)
-      x[i] *= window[i];
+    // 1) Ventaneo
+    for (unsigned int i = 0; i < x.size(); ++i)
+        x[i] *= window[i];
 
-  vector<float> r(npitch_max);
-  autocorrelation(x, r);
+    // 2) Autocorrelación
+    vector<float> r(npitch_max);
+    autocorrelation(x, r);
 
-  // Improved frequency range definitions
-  const unsigned int maxPitch = 400;
-  const unsigned int minPitch = 80;
-  unsigned int lag_min = samplingFreq / maxPitch;
-  unsigned int lag_max = samplingFreq / minPitch;
+    // 3) Definir rango de búsqueda
+    const unsigned int maxPitch = 400;
+    const unsigned int minPitch = 80;
+    unsigned int lag_min = samplingFreq / maxPitch;
+    unsigned int lag_max = samplingFreq / minPitch;
+    if (lag_max >= r.size()) lag_max = r.size() - 1;
 
-  if (lag_max >= r.size())
-      lag_max = r.size() - 1;
-
-  // Enhanced peak finding logic with parabolic interpolation
-  unsigned int best_lag = lag_min;
-  float best_corr = r[lag_min];
-  
-  // First pass: find the coarse maximum peak
-  for (unsigned int l = lag_min + 1; l <= lag_max; ++l) {
-      if (r[l] > best_corr) {
-          best_corr = r[l];
-          best_lag = l;
-      }
-  }
-  
-  // Check if we have a reliable peak by comparing to neighboring values
-
-  float pot = 10 * log10(r[0]);
-
-
-  // Enhanced reliability assessment
-  bool reliable_peak = (best_lag > lag_min && best_lag < lag_max) && 
-  (r[best_lag] > r[best_lag-1] && r[best_lag] > r[best_lag+1]);
-
-  // Additional check for strong harmonics (helps with voiced detection)
-  if (!reliable_peak && best_lag > lag_min*2) {
-  // Check if we have a harmonic peak at half the frequency (double the lag)
-  unsigned int harmonic_lag = best_lag / 2;
-    if (harmonic_lag >= lag_min && 
-      r[harmonic_lag] > 0.38f * r[0] &&  
-      r[harmonic_lag] > r[harmonic_lag-1] && 
-      r[harmonic_lag] > r[harmonic_lag+1]) {
-      reliable_peak = true;
-      best_lag = harmonic_lag;
+    // 4) Búsqueda del pico grueso
+    unsigned int best_lag = lag_min;
+    float best_corr = r[lag_min];
+    for (unsigned int l = lag_min + 1; l <= lag_max; ++l) {
+        if (r[l] > best_corr) {
+            best_corr = r[l];
+            best_lag = l;
+        }
     }
-  }
-// Add this code before returning the pitch in compute_pitch():
 
-// Apply parabolic interpolation for sub-sample pitch accuracy
-float delta = 0.0f;
-if (reliable_peak && best_lag > 0 && best_lag < r.size()-1) {
-    float y1 = r[best_lag-1];
-    float y2 = r[best_lag];
-    float y3 = r[best_lag+1];
-    delta = 0.5f * (y1 - y3) / (y1 - 2.0f*y2 + y3 + 1e-10f);
-    // Limit delta to reasonable range
-    if (delta < -0.5f) delta = -0.5f;
-    if (delta > 0.5f) delta = 0.5f;
+    // 5) Medida de potencia y normalizaciones
+    float pot = 10 * log10(r[0]);
+    float norm_r1   = r[1]        / r[0];
+    float norm_rpeak = r[best_lag] / r[0];
+
+    // 6) Validar fiabilidad del pico
+    bool reliable_peak = (best_lag > lag_min && best_lag < lag_max)
+        && (r[best_lag] > r[best_lag-1] && r[best_lag] > r[best_lag+1]);
+
+    // <<< NUEVO >>> 7) Interpolación parabólica para sub-muestra
+    float delta = 0.0f;
+    if (reliable_peak && best_lag > 0 && best_lag < r.size()-1) {
+        float y1 = r[best_lag - 1];
+        float y2 = r[best_lag];
+        float y3 = r[best_lag + 1];
+        // fórmula Δ = 0.5*(y1 - y3)/(y1 - 2*y2 + y3)
+        delta = 0.5f * (y1 - y3) / ( (y1 - 2.0f*y2 + y3) + 1e-10f );
+        // acotar Δ para evitar saltos excesivos
+        delta = std::max(std::min(delta, 0.5f), -0.5f);
+    }
+
+    // 8) Decidir voiced/unvoiced y devolver f0
+    if (!reliable_peak || unvoiced(pot, norm_r1, norm_rpeak)) {
+        return 0.0f;
+    } else {
+        // uso best_lag + delta para frecuencia sub-muestral
+        return samplingFreq / (best_lag + delta);
+    }
 }
 
-// Use the corrected pitch value
-if (!reliable_peak || unvoiced(pot, r[1] / r[0], r[best_lag] / r[0]))
-    return 0;
-else
-    return static_cast<float>(samplingFreq) / static_cast<float>(best_lag + delta);
-}
+
+
+
+
 }
