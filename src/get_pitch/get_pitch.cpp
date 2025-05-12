@@ -395,7 +395,7 @@ int main(int argc, const char *argv[]) {
     // Define analyzer.
     // Aquí se definen por ejemplo los límites de pitch deseados. 
     // En este ejemplo, se utiliza: min pitch = 50 Hz y max pitch = 500 Hz.
-    PitchAnalyzer analyzer(n_len, rate, PitchAnalyzer::RECT, 50, 500);
+    PitchAnalyzer analyzer(n_len, rate, PitchAnalyzer::TUKEY, 80, 350);
     /// \TODO
     /// Preprocess the input signal in order to ease pitch estimation. For instance,
     /// central-clipping or low pass filtering may be used.

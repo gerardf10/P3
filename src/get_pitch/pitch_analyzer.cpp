@@ -5,6 +5,18 @@
 #include "pitch_analyzer.h"
 
 using namespace std;
+void makeTukeyWindow(vector<float>& w, float alpha) {
+    int N = w.size();
+    int edge = int(alpha * (N-1) / 2);
+    for (int n = 0; n < N; ++n) {
+        if (n < edge)
+            w[n] = 0.5f * (1 + cos( 3.14159 * (2.0f*n/alpha/(N-1) - 1) ));
+        else if (n <= N-1-edge)
+            w[n] = 1.0f;
+        else
+            w[n] = 0.5f * (1 + cos( 3.14159 * (2.0f*(n-(N-1- edge))/alpha/(N-1) + 1) ));
+    }
+}
 
 /// Name space of UPC
 namespace upc {
@@ -39,6 +51,10 @@ namespace upc {
       for (unsigned int n = 0; n < frameLen; ++n) {
         window[n] = 0.54f - 0.46f * cos(2.0f * 3.14159 * n / (frameLen - 1));
       }
+      break;
+    case TUKEY:
+      // Tukey window with alpha = 0.5
+      makeTukeyWindow(window, 0.2f);
       break;
     case RECT:
     default:

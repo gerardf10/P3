@@ -186,11 +186,11 @@ float PitchAnalyzer::compute_pitch(vector<float> & x) const {
 Taula:
 | Error type                  | Number of errors      | %      |
 |----------------------------|-----------------------|--------|
-| Unvoiced frames as voiced  | 235/7045              | 3.34   |
-| Voiced frames as unvoiced  | 268/4155              | 6.45   |
-| Gross voiced errors (+20%) | 41/3887               | 1.05   |
-| MSE of fine errors         |                       | 2.81   |
-| **TOTAL**                  |                       | **92.3** |
+| Unvoiced frames as voiced  | 235/7045              | 3.05   |
+| Voiced frames as unvoiced  | 268/4155              | 7.10   |
+| Gross voiced errors (+20%) | 41/3887               | 0.67   |
+| MSE of fine errors         |                       | 2.71   |
+| **TOTAL**                  |                       | **92.39** |
 
 Captura de pantalla:
 

@@ -19,7 +19,8 @@ namespace upc {
 	/// Wndow type
     enum Window {
 		RECT, 						///< Rectangular window
-		HAMMING						///< Hamming window
+		HAMMING,						///< Hamming window
+    TUKEY,
 	};
 
     void set_window(Window type); ///< pre-compute window
