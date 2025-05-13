@@ -154,19 +154,26 @@ float PitchAnalyzer::compute_pitch(std::vector<float>& x) const {
 
 bool PitchAnalyzer::unvoiced(float pot, float norm_r1, float norm_rpeak) const {
     const float threshold_power = -48.0f;
-    const float threshold_r1 = 0.45f;
+    const float threshold_r1 = 0.52f;
     const float threshold_rpeak = 0.42f;
-    if (norm_rpeak > 0.6f && pot > -48.0f)
+    if (norm_rpeak > 0.55f && pot > -51.0f) // Was norm_rpeak > 0.6f && pot > -48.0f
         return false;
-    if (norm_rpeak > 0.52f && norm_r1 > 0.5f && pot > -55.0f)
+    
+    // This condition remains, it's another path to being voiced.
+    if (norm_rpeak > 0.52f && norm_r1 > 0.5f && pot > -58.0f)
         return false;
+    
+    // Main unvoiced condition check
     if ((pot < threshold_power) || (norm_r1 < threshold_r1) || (norm_rpeak < threshold_rpeak)) {
-        if ((pot > -42.0f && norm_rpeak > 0.36f && norm_r1 > 0.42f) ||
-            (pot > -46.0f && norm_rpeak > 0.45f))
+        // This is an "escape" from being unvoiced if these specific conditions are met.
+        // We can make this slightly easier to meet too.
+        if ((pot > -42.0f && norm_rpeak > 0.35f && norm_r1 > 0.42f) || // Was pot > -42.0f, norm_rpeak > 0.36f, norm_r1 > 0.42f
+            (pot > -44.0f && norm_rpeak > 0.48f))                      // Was pot > -46.0f, norm_rpeak > 0.45f
             return false;
-        return true;
+        return true; // If none of the above voiced conditions are met, it's unvoiced.
     }
-    return false;
+    
+    return false; 
 }
 
 } // namespace upc
